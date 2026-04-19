@@ -675,52 +675,82 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
 <!-- ══ CHART.JS DATALABELS PLUGIN ══ -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/chartjs-plugin-datalabels/2.2.0/chartjs-plugin-datalabels.min.js"></script>
-<!-- ══ FIREBASE SDK ══ -->
-<script type="module">
-  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
-  import { getFirestore, doc, getDoc, setDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+<!-- ══ SUPABASE SDK ══ -->
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script>
+  const SUPABASE_URL = "https://fyggsslndwsguavhduly.supabase.co";
+  const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZ5Z2dzc2xuZHdzZ3VhdmhkdWx5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzYxNzYyNDksImV4cCI6MjA5MTc1MjI0OX0.xxoROa9LNFBgSitG_sEP4IknAzIU7vxZuinRC_P0Lh4";
+  const SCHEMA = "cns";
+  const TABLE  = "almoxarifado_dados";
+  const REST   = SUPABASE_URL + "/rest/v1/" + TABLE;
 
-  const firebaseConfig = {
-    apiKey: "AIzaSyDs6JMrHDU3QQybTaYtWiM1vKlyPHR7Yvo",
-    authDomain: "dl-caieiras.firebaseapp.com",
-    projectId: "dl-caieiras",
-    storageBucket: "dl-caieiras.firebasestorage.app",
-    messagingSenderId: "620913514090",
-    appId: "1:620913514090:web:13fe946b33b35ba6ff9c13"
+  // Headers padrão — Accept-Profile força o schema cns em todas as chamadas REST
+  const HEADERS = {
+    "apikey":          SUPABASE_ANON_KEY,
+    "Authorization":   "Bearer " + SUPABASE_ANON_KEY,
+    "Content-Type":    "application/json",
+    "Accept-Profile":  SCHEMA,   // leitura no schema cns
+    "Content-Profile": SCHEMA,   // escrita  no schema cns
+    "Prefer":          "return=minimal"
   };
 
-  const app = initializeApp(firebaseConfig);
-  const db  = getFirestore(app);
-  const DOC_REF = doc(db, "almoxarifado", "dados");
+  // Cliente Supabase — usado apenas para Realtime
+  const _supabase = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+    db: { schema: SCHEMA }
+  });
 
-  // _localEditTs: timestamp da última edição local. onSnapshot ignora
-  // atualizações que cheguem nos 5s seguintes a uma edição local,
-  // evitando que o Firebase sobrescreva o que o usuário acabou de alterar.
-  window._localEditTs = 0;
+  // _editouLocal: após qualquer edição local o canal realtime fica desativado
+  window._editouLocal = false;
 
+  // ── SAVE (UPSERT via fetch direto) ──────────────────────────────────────
   window.fbSave = async function() {
-    window._editouLocal = true; // bloqueia onSnapshot para sempre nesta sessão
+    window._editouLocal = true;
     try {
-      await setDoc(DOC_REF, {
+      const payload = {
+        id: 1,
         congregacoes: DATA.congregacoes,
-        estoque: DATA.estoque,
-        pedidos: DATA.pedidos,
-        bloqueado: pedidosBloqueados,
-        atualizado: new Date().toISOString()
+        estoque:      DATA.estoque,
+        pedidos:      DATA.pedidos,
+        bloqueado:    pedidosBloqueados,
+        atualizado:   new Date().toISOString()
+      };
+      const res = await fetch(REST + "?id=eq.1", {
+        method:  "PUT",
+        headers: HEADERS,
+        body:    JSON.stringify(payload)
       });
-      console.log("✅ Firebase: dados salvos");
+      // Se não encontrou a linha ainda, faz INSERT
+      if(res.status === 404 || res.status === 406) {
+        await fetch(REST, {
+          method:  "POST",
+          headers: Object.assign({}, HEADERS, { Prefer: "resolution=merge-duplicates,return=minimal" }),
+          body:    JSON.stringify(payload)
+        });
+      }
+      console.log("✅ Supabase: dados salvos");
     } catch(e) {
-      console.error("❌ Firebase save error:", e);
+      console.error("❌ Supabase save error:", e);
     }
   };
 
-  // Recalcula items e total_geral de cada congregação a partir de DATA.pedidos,
-  // corrigindo qualquer inconsistência acumulada no Firebase por edições anteriores.
+  // ── UPSERT robusto (POST com resolution=merge-duplicates) ───────────────
+  async function sbUpsert(payload) {
+    const res = await fetch(REST, {
+      method:  "POST",
+      headers: Object.assign({}, HEADERS, { Prefer: "resolution=merge-duplicates,return=minimal" }),
+      body:    JSON.stringify(payload)
+    });
+    if(!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw err;
+    }
+  }
+
+  // ── Recalcula totais das congregações a partir dos pedidos ───────────────
   function recalcularCongregacoes() {
     Object.keys(DATA.congregacoes).forEach(function(nome) {
       const c = DATA.congregacoes[nome];
       const pedidosCasa = DATA.pedidos.filter(p => p.congregacao === nome);
-      // Reconstrói o mapa de itens somando todos os pedidos
       const mapa = {};
       pedidosCasa.forEach(function(p) {
         if(!mapa[p.descricao]) {
@@ -731,70 +761,84 @@
       });
       const novosItems = Object.values(mapa);
       if(novosItems.length > 0) {
-        // Só substitui se houver pedidos — preserva congregações sem pedidos
         c.items = novosItems;
         c.total_geral = novosItems.reduce(function(s, i) { return s + i.total; }, 0);
       }
     });
   }
 
+  // ── LOAD (GET via fetch direto com Accept-Profile) ───────────────────────
   async function fbLoad() {
     try {
-      const snap = await getDoc(DOC_REF);
-      if(snap.exists()) {
-        const d = snap.data();
-        if(d.congregacoes) DATA.congregacoes = d.congregacoes;
-        if(d.estoque)      DATA.estoque      = d.estoque;
-        if(d.pedidos)      DATA.pedidos      = d.pedidos;
-        // ── Recalcular totais das congregações a partir dos pedidos ──
-        // Corrige qualquer valor duplicado/multiplicado acumulado no Firebase
+      const res = await fetch(REST + "?id=eq.1&limit=1", {
+        method:  "GET",
+        headers: HEADERS
+      });
+      if(!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw err;
+      }
+      const rows = await res.json();
+      const data = rows[0] || null;
+      if(data) {
+        if(data.congregacoes) DATA.congregacoes = data.congregacoes;
+        if(data.estoque)      DATA.estoque      = data.estoque;
+        if(data.pedidos)      DATA.pedidos      = data.pedidos;
         recalcularCongregacoes();
-        // ── Restaurar estado do bloqueio ──
-        if(typeof d.bloqueado === 'boolean' && d.bloqueado !== pedidosBloqueados) {
-          pedidosBloqueados = d.bloqueado;
+        if(typeof data.bloqueado === 'boolean' && data.bloqueado !== pedidosBloqueados) {
+          pedidosBloqueados = data.bloqueado;
           applyBloqueioUI();
         }
         IGREJAS = Object.keys(DATA.congregacoes).sort();
         buildDashboard(); buildCongregacoes(); buildEstoque();
         buildPedidos();   buildHistorico(); buildCompras(); buildCadastro();
         rebuildIgrejaSelects();
-        // Salva os dados já corrigidos de volta no Firebase
-        window.fbSave();
-        console.log("✅ Firebase: dados carregados e recalculados");
-        showToast("☁️ Dados sincronizados com Firebase!");
+        // Salva dados já corrigidos de volta
+        await sbUpsert({
+          id: 1,
+          congregacoes: DATA.congregacoes,
+          estoque:      DATA.estoque,
+          pedidos:      DATA.pedidos,
+          bloqueado:    pedidosBloqueados,
+          atualizado:   new Date().toISOString()
+        });
+        console.log("✅ Supabase: dados carregados e recalculados");
+        showToast("☁️ Dados sincronizados com Supabase!");
       } else {
-        console.log("ℹ️ Firebase: nenhum dado encontrado, usando dados locais.");
+        console.log("ℹ️ Supabase: nenhum dado encontrado, usando dados locais.");
       }
     } catch(e) {
-      console.error("❌ Firebase load error:", e);
-      showToast("⚠️ Firebase offline — usando dados locais.");
+      console.error("❌ Supabase load error:", e);
+      showToast("⚠️ Supabase offline — usando dados locais.");
     }
   }
 
-  // _editouLocal: após qualquer edição local, o onSnapshot fica desativado
-  // até o próximo reload da página, evitando sobrescrita dos dados editados.
-  window._editouLocal = false;
-
-  onSnapshot(DOC_REF, (snap) => {
-    // Bloqueia permanentemente após primeira edição local nesta sessão
-    if(window._editouLocal) return;
-    if(snap.exists() && window._fbLoaded) {
-      const d = snap.data();
-      if(d.congregacoes) DATA.congregacoes = d.congregacoes;
-      if(d.estoque)      DATA.estoque      = d.estoque;
-      if(d.pedidos)      DATA.pedidos      = d.pedidos;
-      // ── Sincronizar bloqueio em tempo real ──
-      if(typeof d.bloqueado === 'boolean' && d.bloqueado !== pedidosBloqueados) {
-        pedidosBloqueados = d.bloqueado;
-        applyBloqueioUI();
-        showToast(pedidosBloqueados ? '🔒 Sistema bloqueado remotamente!' : '🔓 Sistema liberado remotamente!');
+  // ── Realtime ─────────────────────────────────────────────────────────────
+  const realtimeChannel = _supabase
+    .channel("cns-almoxarifado")
+    .on(
+      "postgres_changes",
+      { event: "*", schema: SCHEMA, table: TABLE, filter: "id=eq.1" },
+      (payload) => {
+        if(window._editouLocal) return;
+        if(!window._fbLoaded) return;
+        const d = payload.new;
+        if(!d) return;
+        if(d.congregacoes) DATA.congregacoes = d.congregacoes;
+        if(d.estoque)      DATA.estoque      = d.estoque;
+        if(d.pedidos)      DATA.pedidos      = d.pedidos;
+        if(typeof d.bloqueado === 'boolean' && d.bloqueado !== pedidosBloqueados) {
+          pedidosBloqueados = d.bloqueado;
+          applyBloqueioUI();
+          showToast(pedidosBloqueados ? '🔒 Sistema bloqueado remotamente!' : '🔓 Sistema liberado remotamente!');
+        }
+        IGREJAS = Object.keys(DATA.congregacoes).sort();
+        buildDashboard(); buildCongregacoes(); buildEstoque();
+        buildPedidos();   buildHistorico(); buildCompras(); buildCadastro();
+        rebuildIgrejaSelects();
       }
-      IGREJAS = Object.keys(DATA.congregacoes).sort();
-      buildDashboard(); buildCongregacoes(); buildEstoque();
-      buildPedidos();   buildHistorico(); buildCompras(); buildCadastro();
-      rebuildIgrejaSelects();
-    }
-  });
+    )
+    .subscribe();
 
   window.addEventListener("load", () => {
     setTimeout(() => {
@@ -814,7 +858,9 @@
         <small>CNS · Caieiras / SP — Almoxarifado</small>
       </div>
     </div>
-     </div>
+    <span class="header-month" id="header-month-label">📅</span>
+<script>!function(){var m=["JANEIRO","FEVEREIRO","MARÇO","ABRIL","MAIO","JUNHO","JULHO","AGOSTO","SETEMBRO","OUTUBRO","NOVEMBRO","DEZEMBRO"];var d=new Date();document.getElementById("header-month-label").textContent="📅 "+m[d.getMonth()]+" "+d.getFullYear();}();</script>
+  </div>
 </header>
 
 <nav>
@@ -1145,6 +1191,17 @@
       </div>
       <div id="church-grid" style="display:flex;flex-direction:column;gap:10px;"></div>
       <div id="church-count" style="margin-top:12px;font-size:12px;color:var(--text-muted);"></div>
+
+      <!-- ══ BACKUP ══ -->
+      <div style="margin-top:28px;padding-top:22px;border-top:2px dashed var(--border);">
+        <div class="section-title" style="margin-top:0;">💾 Backup de Dados</div>
+        <p style="font-size:12px;color:var(--text-muted);margin-bottom:16px;">Exporte todos os dados do sistema (estoque, pedidos, congregações) em um arquivo JSON. Para restaurar, importe o arquivo gerado anteriormente.</p>
+        <div style="display:flex;gap:12px;flex-wrap:wrap;">
+          <button class="btn-save" style="background:var(--green);display:flex;align-items:center;gap:8px;" onclick="exportBackup()">⬇️ Exportar Backup</button>
+          <button class="btn-save" style="background:var(--navy-mid);display:flex;align-items:center;gap:8px;" onclick="document.getElementById('backupFileInput').click()">⬆️ Importar Backup</button>
+          <input type="file" id="backupFileInput" accept=".json" style="display:none;" onchange="importBackup(this)">
+        </div>
+      </div>
     </div>
   </div>
 
@@ -1384,6 +1441,67 @@ function deleteCongrItem(congregName, itemIdx) {
 // CADASTRO DE IGREJAS
 // ══════════════════════════════════════════════
 function buildCadastro() { renderChurches(); }
+
+// ══════════════════════════════════════════════
+// BACKUP — EXPORTAR / IMPORTAR
+// ══════════════════════════════════════════════
+function exportBackup() {
+  const backup = {
+    versao: "1.0",
+    exportadoEm: new Date().toISOString(),
+    congregacoes: DATA.congregacoes,
+    estoque: DATA.estoque,
+    pedidos: DATA.pedidos,
+    bloqueado: pedidosBloqueados
+  };
+  const json = JSON.stringify(backup, null, 2);
+  const blob = new Blob([json], { type: 'application/json' });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  const now  = new Date();
+  const ts   = now.toISOString().slice(0,10);
+  a.href     = url;
+  a.download = 'backup_ccb_caieiras_' + ts + '.json';
+  a.click();
+  URL.revokeObjectURL(url);
+  showToast('✅ Backup exportado com sucesso!');
+}
+
+function importBackup(input) {
+  const file = input.files[0];
+  if(!file) return;
+  if(!confirm('⚠️ Importar o backup vai SUBSTITUIR todos os dados atuais. Deseja continuar?')) {
+    input.value = '';
+    return;
+  }
+  const reader = new FileReader();
+  reader.onload = function(e) {
+    try {
+      const backup = JSON.parse(e.target.result);
+      if(!backup.congregacoes || !backup.estoque || !backup.pedidos) {
+        showToast('❌ Arquivo inválido! Não é um backup CCB Caieiras.');
+        return;
+      }
+      DATA.congregacoes = backup.congregacoes;
+      DATA.estoque      = backup.estoque;
+      DATA.pedidos      = backup.pedidos;
+      if(typeof backup.bloqueado === 'boolean') {
+        pedidosBloqueados = backup.bloqueado;
+        applyBloqueioUI();
+      }
+      IGREJAS = Object.keys(DATA.congregacoes).sort();
+      buildDashboard(); buildCongregacoes(); buildEstoque();
+      buildPedidos();   buildHistorico(); buildCompras(); buildCadastro();
+      rebuildIgrejaSelects();
+      if(window.fbSave) window.fbSave();
+      showToast('✅ Backup importado e sincronizado com Supabase!');
+    } catch(err) {
+      showToast('❌ Erro ao ler o arquivo: ' + err.message);
+    }
+    input.value = '';
+  };
+  reader.readAsText(file);
+}
 
 function openChurchModal(nome) {
   const c = DATA.congregacoes[nome] || {};
