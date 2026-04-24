@@ -1967,9 +1967,33 @@ function filterCongr() {
 }
 
 function exportCongrPDF() {
-  const filt = document.getElementById('filter-congr-pdf')?.value || '';
-  let entries = Object.entries(DATA.congregacoes);
-  if(filt) entries = entries.filter(e => e[0] === filt);
+  const filt    = document.getElementById('filter-congr-pdf')?.value || '';
+  const filtMes = document.getElementById('filter-congr-mes')?.value || '';
+  let names = Object.keys(DATA.congregacoes);
+  if(filt) names = names.filter(n => n === filt);
+
+  // Recalcula os itens de cada congregação respeitando o filtro de mês
+  let entries;
+  if(filtMes) {
+    entries = names.map(function(nome) {
+      const c = DATA.congregacoes[nome];
+      const mapa = {};
+      DATA.pedidos.forEach(function(p) {
+        if(p.congregacao !== nome) return;
+        const parts = (p.data||'').split('/');
+        if(parts[1] !== filtMes) return;
+        if(!mapa[p.descricao]) mapa[p.descricao] = { descricao:p.descricao, unidade:p.unidade, preco:p.preco, saida:0, total:0, obs:p.obs||'' };
+        mapa[p.descricao].saida += p.quantidade;
+        mapa[p.descricao].total += p.preco * p.quantidade;
+      });
+      const items = Object.values(mapa);
+      const total_geral = items.reduce((s,i) => s+i.total, 0);
+      return [nome, Object.assign({}, c, { items, total_geral })];
+    });
+  } else {
+    entries = names.map(nome => [nome, DATA.congregacoes[nome]]);
+  }
+
   if(!entries.length) { showToast('⚠️ Nenhuma congregação selecionada!'); return; }
 
   const hoje = fmtDate(new Date());
