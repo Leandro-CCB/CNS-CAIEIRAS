@@ -9,6 +9,7 @@
 <link rel="manifest" href="data:application/json,{%22name%22:%22CCB%20Caieiras%22,%22short_name%22:%22CCB%22,%22theme_color%22:%22%231a3a5c%22,%22background_color%22:%22%23f0f4f8%22,%22display%22:%22standalone%22}">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Sora:wght@300;400;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
 <style>
   :root {
     --navy: #1a3a5c;
@@ -597,7 +598,24 @@
   }
   .lock-toggle-wrap.bloqueado .lock-label-status { color: var(--red); }
 
-  /* ── Modal Bloqueio de Pedidos ── */
+  /* ── Modal Download Imagem ── */
+  .download-modal-overlay { display:none; position:fixed; inset:0; background:rgba(0,0,0,0.6); backdrop-filter:blur(5px); z-index:2000; align-items:center; justify-content:center; }
+  .download-modal-overlay.open { display:flex; }
+  .download-modal-box { background:var(--card); border-radius:var(--radius); padding:0; max-width:480px; width:95%; box-shadow:var(--shadow-lg); animation:popIn 0.25s ease; overflow:hidden; }
+  .download-modal-header { background:linear-gradient(135deg,var(--navy),var(--navy-mid)); color:#fff; padding:18px 22px; display:flex; align-items:center; gap:10px; }
+  .download-modal-header h3 { font-size:15px; font-weight:700; flex:1; }
+  .download-modal-body { padding:22px; }
+  .download-preview-wrap { background:#f0f4f8; border-radius:var(--radius-sm); padding:16px; margin-bottom:18px; border:1.5px dashed var(--border); display:flex; flex-direction:column; align-items:center; gap:10px; }
+  .download-preview-wrap img { max-width:100%; border-radius:8px; box-shadow:var(--shadow); }
+  .download-preview-loading { color:var(--text-muted); font-size:13px; display:flex; align-items:center; gap:8px; }
+  .download-btns { display:flex; gap:10px; flex-wrap:wrap; justify-content:flex-end; }
+  .btn-download-img { background:var(--green); color:#fff; border:none; padding:10px 22px; border-radius:var(--radius-sm); font-family:'Sora',sans-serif; font-size:13px; font-weight:700; cursor:pointer; display:flex; align-items:center; gap:6px; transition:background 0.2s; }
+  .btn-download-img:hover { background:#219a52; }
+  .btn-download-img:disabled { background:#a0c8a0; cursor:not-allowed; }
+  .btn-close-download { background:var(--bg); color:var(--text-muted); border:1px solid var(--border); padding:10px 18px; border-radius:var(--radius-sm); font-family:'Sora',sans-serif; font-size:13px; font-weight:600; cursor:pointer; }
+  /* Ticket de impressão (hidden, used for canvas) */
+  #pedidoTicket { position:fixed; top:-9999px; left:-9999px; width:480px; font-family:'Sora',sans-serif; background:#fff; z-index:-1; padding:0; }
+
   .bloqueio-overlay {
     display: none; position: fixed; inset: 0;
     background: rgba(10,20,40,0.72);
@@ -2426,6 +2444,13 @@ function confirmPedido(yes) {
   // Recalcula congregação apenas a partir dos pedidos (evita duplicação)
   recalcularCongregacoesDosPedidos();
 
+  // Guarda dados para geração da imagem ANTES de limpar o formulário
+  const _snapshotCasa  = casa;
+  const _snapshotResp  = resp;
+  const _snapshotData  = dataP;
+  const _snapshotObs   = obs;
+  const _snapshotItens = valid.slice();
+
   document.getElementById('oCasa').value = '';
   document.getElementById('oResp').value = '';
   document.getElementById('oObs').value  = '';
@@ -2437,6 +2462,9 @@ function confirmPedido(yes) {
   buildDashboard(); buildCongregacoes(); buildHistorico(); buildEstoque(); buildCompras();
   if(window.fbSave) window.fbSave();
   showToast('✅ Pedido registrado e estoque atualizado!');
+
+  // Abre modal para salvar imagem
+  abrirDownloadModal(_snapshotCasa, _snapshotResp, _snapshotData, _snapshotObs, _snapshotItens);
 }
 
 // ══════════════════════════════════════════════
@@ -2933,6 +2961,104 @@ function buildCompras() {
 }
 
 // ══════════════════════════════════════════════
+// DOWNLOAD IMAGEM DO PEDIDO
+// ══════════════════════════════════════════════
+let _imgDataUrl = null;
+let _imgFilename = 'pedido.png';
+
+function abrirDownloadModal(casa, resp, data, obs, itens) {
+  _imgDataUrl = null;
+  const modal = document.getElementById('downloadImgModal');
+  const wrap   = document.getElementById('downloadPreviewWrap');
+  const btnBaixar = document.getElementById('btnBaixarImg');
+  wrap.innerHTML = '<div class="download-preview-loading">⏳ Gerando imagem…</div>';
+  btnBaixar.disabled = true;
+  modal.classList.add('open');
+
+  // Gera o ticket HTML
+  const totalGeral = itens.reduce((s,r) => s + (r.preco||0)*r.quantidade, 0);
+  const now = new Date();
+  const horaStr = now.toLocaleTimeString('pt-BR', {hour:'2-digit',minute:'2-digit'});
+
+  const ticket = document.getElementById('pedidoTicket');
+  ticket.style.cssText = 'position:fixed;top:-9999px;left:-9999px;width:480px;font-family:Sora,sans-serif;background:#fff;z-index:-1;padding:0;';
+  ticket.innerHTML = `
+    <div style="background:#1a3a5c;padding:22px 24px 16px;color:#fff;">
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:6px;">
+        <div style="background:#e6a817;border-radius:8px;width:36px;height:36px;display:flex;align-items:center;justify-content:center;font-size:16px;font-weight:800;color:#1a3a5c;flex-shrink:0;">✦</div>
+        <div>
+          <div style="font-size:15px;font-weight:700;letter-spacing:0.2px;">CCB Caieiras · Almoxarifado</div>
+          <div style="font-size:11px;opacity:0.7;margin-top:1px;">Congregação Cristã no Brasil — CNS Caieiras/SP</div>
+        </div>
+      </div>
+      <div style="height:2px;background:rgba(230,168,23,0.5);border-radius:1px;margin-top:12px;"></div>
+    </div>
+    <div style="background:#f0f7ff;padding:14px 24px 10px;border-bottom:1px solid #d0dce8;">
+      <div style="font-size:13px;font-weight:700;color:#1a3a5c;margin-bottom:8px;display:flex;align-items:center;gap:6px;">📋 Resumo do Pedido</div>
+      <div style="display:flex;flex-wrap:wrap;gap:16px;">
+        <div><span style="font-size:10px;font-weight:700;color:#607080;text-transform:uppercase;letter-spacing:0.5px;">Congregação</span><div style="font-size:14px;font-weight:700;color:#1a3a5c;margin-top:2px;">⛪ ${casa}</div></div>
+        <div><span style="font-size:10px;font-weight:700;color:#607080;text-transform:uppercase;letter-spacing:0.5px;">Responsável</span><div style="font-size:14px;font-weight:600;color:#1a3a5c;margin-top:2px;">👤 ${resp}</div></div>
+        <div><span style="font-size:10px;font-weight:700;color:#607080;text-transform:uppercase;letter-spacing:0.5px;">Data</span><div style="font-size:13px;font-weight:600;color:#1a3a5c;margin-top:2px;">📅 ${data} ${horaStr}</div></div>
+      </div>
+      ${obs ? `<div style="margin-top:8px;font-size:11px;color:#607080;"><strong>Obs:</strong> ${obs}</div>` : ''}
+    </div>
+    <div style="padding:16px 24px;">
+      ${itens.map((r,i) => `
+        <div style="display:flex;align-items:center;gap:12px;padding:9px 12px;background:${i%2===0?'#f8fafC':'#fff'};border-radius:8px;margin-bottom:6px;border:1px solid #e8edf2;">
+          <div style="background:#3b7fc4;color:#fff;border-radius:6px;padding:3px 10px;font-size:14px;font-weight:800;white-space:nowrap;">${r.quantidade}x</div>
+          <div style="flex:1;">
+            <div style="font-size:13px;font-weight:600;color:#1a3a5c;">${r.descricao}</div>
+            <div style="font-size:11px;color:#607080;margin-top:1px;">${r.unidade}${r.preco>0?' · R$ '+r.preco.toFixed(2).replace('.',',')+'/un':''}</div>
+          </div>
+          ${r.preco>0 ? `<div style="font-family:monospace;font-size:13px;font-weight:700;color:#2a527a;white-space:nowrap;">R$ ${(r.preco*r.quantidade).toFixed(2).replace('.',',')}</div>` : ''}
+        </div>`).join('')}
+      ${totalGeral > 0 ? `
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-top:12px;padding:10px 12px;background:#1a3a5c;border-radius:8px;">
+          <span style="font-size:12px;font-weight:700;color:#a0b4c8;text-transform:uppercase;letter-spacing:0.5px;">Total Geral</span>
+          <span style="font-family:monospace;font-size:17px;font-weight:800;color:#e6a817;">R$ ${totalGeral.toFixed(2).replace('.',',')}</span>
+        </div>` : ''}
+    </div>
+    <div style="background:#f0f4f8;padding:10px 24px;text-align:center;border-top:1px solid #d0dce8;">
+      <span style="font-size:10px;color:#a0b0c0;">Gerado em ${now.toLocaleDateString('pt-BR')} às ${horaStr} · Sistema CCB Caieiras</span>
+    </div>`;
+
+  // Usa html2canvas após um pequeno delay para garantir render
+  setTimeout(function() {
+    html2canvas(ticket, { scale:2, useCORS:true, backgroundColor:'#ffffff', logging:false })
+      .then(function(canvas) {
+        _imgDataUrl = canvas.toDataURL('image/png');
+        _imgFilename = 'pedido_' + casa.replace(/\s+/g,'_') + '_' + data.replace(/\//g,'-') + '.png';
+        const img = document.createElement('img');
+        img.src = _imgDataUrl;
+        img.style.cssText = 'max-width:100%;border-radius:8px;box-shadow:0 2px 12px rgba(0,0,0,0.12);';
+        wrap.innerHTML = '';
+        wrap.appendChild(img);
+        btnBaixar.disabled = false;
+      })
+      .catch(function(err) {
+        wrap.innerHTML = '<div style="color:#c0392b;font-size:13px;">⚠️ Erro ao gerar imagem. Tente novamente.</div>';
+        console.error(err);
+      });
+  }, 120);
+}
+
+function fecharDownloadModal() {
+  document.getElementById('downloadImgModal').classList.remove('open');
+  _imgDataUrl = null;
+}
+
+function baixarImagemPedido() {
+  if(!_imgDataUrl) return;
+  const a = document.createElement('a');
+  a.href = _imgDataUrl;
+  a.download = _imgFilename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  showToast('📥 Imagem salva com sucesso!');
+}
+
+// ══════════════════════════════════════════════
 // INIT
 // ══════════════════════════════════════════════
 buildDashboard();
@@ -3002,6 +3128,28 @@ buildCadastro();
 
 <!-- ══ TOAST ══ -->
 <div class="toast" id="toastMsg"></div>
+
+<!-- ══ MODAL DOWNLOAD IMAGEM ══ -->
+<div class="download-modal-overlay" id="downloadImgModal">
+  <div class="download-modal-box">
+    <div class="download-modal-header">
+      <span style="font-size:22px">🖼️</span>
+      <h3>Salvar Resumo do Pedido</h3>
+    </div>
+    <div class="download-modal-body">
+      <div class="download-preview-wrap" id="downloadPreviewWrap">
+        <div class="download-preview-loading" id="downloadPreviewLoading">⏳ Gerando imagem…</div>
+      </div>
+      <div class="download-btns">
+        <button class="btn-close-download" onclick="fecharDownloadModal()">Fechar</button>
+        <button class="btn-download-img" id="btnBaixarImg" onclick="baixarImagemPedido()" disabled>⬇️ Baixar Imagem</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══ TICKET INVISÍVEL PARA GERAÇÃO DE IMAGEM ══ -->
+<div id="pedidoTicket"></div>
 
 <!-- ══ RODAPÉ ══ -->
 <footer style="background:var(--navy);color:#a0b4c8;text-align:center;padding:14px 24px;font-size:12px;margin-top:40px;border-top:2px solid var(--gold);">
