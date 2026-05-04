@@ -883,7 +883,7 @@
 
 <nav>
   <div class="nav-inner">
-    <button class="tab-btn active" onclick="showTab('pedidos')">📋 Pedidos</button>
+    <button class="tab-btn active" onclick="showTab('pedidos', this)">📋 Pedidos</button>
     <button class="tab-btn" onclick="protectedTab('dashboard')">📊 Dashboard</button>
     <button class="tab-btn" onclick="protectedTab('congregacoes')">⛪ Congregações <span class="tab-badge" id="badge-congr">9</span></button>
     <button class="tab-btn" onclick="protectedTab('historico')">📂 Histórico <span class="tab-badge" id="badge-hist" style="background:#8e44ad;color:#fff">0</span></button>
@@ -1340,11 +1340,18 @@ function rebuildIgrejaSelects() {
   rebuildDashFilterSelect();
 }
 
-function showTab(id) {
+function showTab(id, btn) {
   document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
   document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
   document.getElementById('view-' + id).classList.add('active');
-  event.currentTarget.classList.add('active');
+  if(btn) {
+    btn.classList.add('active');
+  } else {
+    document.querySelectorAll('.tab-btn').forEach(function(b) {
+      var oc = b.getAttribute('onclick') || '';
+      if(oc.includes("'" + id + "'")) b.classList.add('active');
+    });
+  }
 }
 
 function showToast(msg) {
@@ -1406,35 +1413,55 @@ function editCongrItem(congregName, itemIdx) {
   ], function(data) {
     if(data.saida <= 0) { showToast('⚠️ A quantidade deve ser maior que zero!'); return; }
     const descOriginal = c.items[itemIdx].descricao;
-    const saidaOriginal = c.items[itemIdx].saida;
-    c.items[itemIdx].descricao = data.descricao;
-    c.items[itemIdx].unidade   = data.unidade;
-    c.items[itemIdx].preco     = data.preco;
-    c.items[itemIdx].saida     = data.saida;
-    c.items[itemIdx].total     = data.preco * data.saida;
-    c.items[itemIdx].obs       = data.obs;
-    c.total_geral = c.items.reduce((s, i) => s + i.total, 0);
 
-    // ── Sincronizar DATA.pedidos ──
-    // Remove todos os pedidos antigos deste produto/congregação
-    // e substitui por um único pedido sintético com os valores atualizados.
-    // Isso garante que buildDashboard (que soma DATA.pedidos) sempre bata
-    // com o que está em DATA.congregacoes.
-    DATA.pedidos = DATA.pedidos.filter(p =>
-      !(p.congregacao === congregName && p.descricao === descOriginal)
-    );
-    DATA.pedidos.push({
-      descricao:   data.descricao,
-      unidade:     data.unidade,
-      preco:       data.preco,
-      congregacao: congregName,
-      quantidade:  data.saida,
-      data:        (function(){ const d = new Date(); return d.toLocaleDateString('pt-BR',{day:'2-digit',month:'2-digit',year:'numeric'}); })(),
-      obs:         data.obs || ''
+    // ── Sincronizar DATA.pedidos preservando o histórico ──
+    // 1) Atualiza descrição, unidade, preço e obs em todos os pedidos existentes
+    DATA.pedidos.forEach(function(p) {
+      if(p.congregacao === congregName && p.descricao === descOriginal) {
+        p.descricao = data.descricao;
+        p.unidade   = data.unidade;
+        p.preco     = data.preco;
+        if(data.obs !== undefined) p.obs = data.obs;
+      }
     });
+
+    // 2) Ajusta a quantidade total sem apagar o histórico:
+    //    Calcula a diferença entre o novo total e a soma atual dos pedidos
+    //    e aplica essa diferença no pedido mais recente deste produto/congregação.
+    const pedidosRelacionados = DATA.pedidos.filter(function(p) {
+      return p.congregacao === congregName && p.descricao === data.descricao;
+    });
+    const somaAtual = pedidosRelacionados.reduce(function(s, p) { return s + (p.quantidade || 0); }, 0);
+    const diff = data.saida - somaAtual;
+
+    if(diff !== 0) {
+      if(pedidosRelacionados.length > 0) {
+        // Ajusta no pedido mais recente
+        const ultimoPedido = pedidosRelacionados[pedidosRelacionados.length - 1];
+        ultimoPedido.quantidade = (ultimoPedido.quantidade || 0) + diff;
+        if(ultimoPedido.quantidade <= 0) ultimoPedido.quantidade = 1;
+      } else {
+        // Sem pedido existente, cria um novo
+        const hoje = (function(){ const d = new Date(); return d.toLocaleDateString('pt-BR',{day:'2-digit',month:'2-digit',year:'numeric'}); })();
+        DATA.pedidos.push({
+          descricao:   data.descricao,
+          unidade:     data.unidade,
+          preco:       data.preco,
+          congregacao: congregName,
+          quantidade:  data.saida,
+          data:        hoje,
+          obs:         data.obs || ''
+        });
+      }
+    }
+
+    // Recalcula DATA.congregacoes a partir dos pedidos atualizados
+    recalcularCongregacoesDosPedidos();
 
     filterCongr();
     buildDashboard();
+    buildHistorico();
+    buildEstoque();
     if(window.fbSave) window.fbSave();
     showToast('✅ Item atualizado com sucesso!');
   });
@@ -1559,6 +1586,10 @@ function saveChurchModal() {
     DATA.congregacoes[novoNome] = Object.assign({}, old, dados);
     delete DATA.congregacoes[original];
     IGREJAS = IGREJAS.map(n => n === original ? novoNome : n).sort();
+    // Atualiza DATA.pedidos para manter consistencia do historico
+    DATA.pedidos.forEach(function(p) {
+      if(p.congregacao === original) p.congregacao = novoNome;
+    });
   } else {
     if(!DATA.congregacoes[novoNome]) DATA.congregacoes[novoNome] = { items:[], total_geral:0 };
     Object.assign(DATA.congregacoes[novoNome], dados);
@@ -2169,6 +2200,7 @@ function editEstoque(idx) {
     { key:'comprar',      label:'Forçar "Comprar"?',   type:'select', value:String(e.comprar),
       options:[{v:'false',l:'Não'},{v:'true',l:'Sim'}] }
   ], function(data) {
+    var descOriginal = DATA.estoque[idx].descricao;
     Object.assign(DATA.estoque[idx], {
       descricao:    data.descricao,
       unidade:      data.unidade,
@@ -2178,8 +2210,19 @@ function editEstoque(idx) {
       comprar:      data.comprar === 'true',
       _comprar_manual: data.comprar === 'true'
     });
+    // Se a descricao mudou, atualiza DATA.pedidos e congregacoes para manter consistencia
+    if(data.descricao !== descOriginal) {
+      DATA.pedidos.forEach(function(p) {
+        if(p.descricao === descOriginal) {
+          p.descricao = data.descricao;
+          p.unidade   = data.unidade;
+          p.preco     = data.preco;
+        }
+      });
+      recalcularCongregacoesDosPedidos();
+    }
     recalcularEstoque();
-    filterEstoque(); buildCompras(); buildDashboard();
+    filterEstoque(); buildCompras(); buildDashboard(); buildCongregacoes(); buildHistorico();
     if(window.fbSave) window.fbSave();
     showToast('✅ Item atualizado!');
   });
@@ -2256,7 +2299,7 @@ const _SENHA_ABA = 'amem';
 let _senhaDesbloqueada = false;
 
 function protectedTab(tabName) {
-  if(_senhaDesbloqueada) { showTab(tabName); return; }
+  if(_senhaDesbloqueada) { showTab(tabName, event && event.currentTarget ? event.currentTarget : null); return; }
   const modal = document.getElementById('senhaModal');
   modal.dataset.target = tabName;
   document.getElementById('senhaInput').value = '';
@@ -2271,7 +2314,7 @@ function confirmarSenha() {
     _senhaDesbloqueada = true;
     const target = document.getElementById('senhaModal').dataset.target;
     fecharSenhaModal();
-    showTab(target);
+    showTab(target, null);
   } else {
     document.getElementById('senhaError').style.display = 'block';
     document.getElementById('senhaInput').value = '';
