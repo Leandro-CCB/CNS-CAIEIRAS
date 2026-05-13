@@ -1400,10 +1400,13 @@ function saveEditModal() {
 // ══════════════════════════════════════════════
 // EDITAR / EXCLUIR ITEM DE CONGREGAÇÃO
 // ══════════════════════════════════════════════
-function editCongrItem(congregName, itemIdx) {
-  const c = DATA.congregacoes[congregName];
-  if(!c || !c.items[itemIdx]) return;
-  const it = c.items[itemIdx];
+function editCongrItem(cacheIdx) {
+  var cached = window._congrItemCache[cacheIdx];
+  if(!cached) { showToast('⚠️ Item não encontrado. Recarregue a lista.'); return; }
+  var congregName = cached.congregName;
+  var it = cached.item; // item da view atual (ja respeita filtro de mes)
+  var c = DATA.congregacoes[congregName];
+  if(!c) return;
   openEditModal('✏️ Editar Item — ' + congregName, [
     { key:'descricao', label:'Descrição', value: it.descricao },
     { key:'unidade',   label:'Unidade',   value: it.unidade },
@@ -1412,7 +1415,7 @@ function editCongrItem(congregName, itemIdx) {
     { key:'obs',       label:'Observação', value: it.obs || '' }
   ], function(data) {
     if(data.saida <= 0) { showToast('⚠️ A quantidade deve ser maior que zero!'); return; }
-    const descOriginal = c.items[itemIdx].descricao;
+    const descOriginal = it.descricao;
 
     // ── Sincronizar DATA.pedidos preservando o histórico ──
     // 1) Atualiza descrição, unidade, preço e obs em todos os pedidos existentes
@@ -1467,13 +1470,19 @@ function editCongrItem(congregName, itemIdx) {
   });
 }
 
-function deleteCongrItem(congregName, itemIdx) {
+function deleteCongrItem(cacheIdx) {
+  var cached = window._congrItemCache[cacheIdx];
+  if(!cached) { showToast('⚠️ Item não encontrado. Recarregue a lista.'); return; }
+  var congregName = cached.congregName;
+  var it = cached.item;
   const c = DATA.congregacoes[congregName];
-  if(!c || !c.items[itemIdx]) return;
-  const it = c.items[itemIdx];
+  if(!c) return;
+  const itemIdx = c.items.findIndex(function(i){ return i.descricao === it.descricao; });
   if(!confirm('Excluir "' + it.descricao + '" da congregação ' + congregName + '?\n\nEsta ação não pode ser desfeita.')) return;
-  c.items.splice(itemIdx, 1);
-  c.total_geral = c.items.reduce((s, i) => s + i.total, 0);
+  if(itemIdx >= 0) {
+    c.items.splice(itemIdx, 1);
+    c.total_geral = c.items.reduce((s, i) => s + i.total, 0);
+  }
   // ── Remover pedidos relacionados de DATA.pedidos ──
   DATA.pedidos = DATA.pedidos.filter(p => !(p.congregacao === congregName && p.descricao === it.descricao));
   filterCongr();
@@ -1938,16 +1947,24 @@ function buildCongregacoes() {
   filterCongr();
 }
 
+// Cache global dos itens renderizados — resetado a cada renderCongr
+window._congrItemCache = [];
+
 function renderCongr(entries) {
+  // Limpa o cache a cada renderizacao
+  window._congrItemCache = [];
+
   document.getElementById('congr-grid').innerHTML = entries.map(function(entry) {
     var name = entry[0], c = entry[1];
-    var safeName = name.replace(/\\/g,'\\\\').replace(/'/g,"\\'");
 
     var itemsHtml;
     if(c.items.length === 0) {
       itemsHtml = '<div class="congr-empty">Nenhum pedido registrado este mês</div>';
     } else {
-      itemsHtml = c.items.map(function(it, idx) {
+      itemsHtml = c.items.map(function(it) {
+        // Guarda referencia do item + congregacao no cache e usa o indice no onclick
+        var cacheIdx = window._congrItemCache.length;
+        window._congrItemCache.push({ congregName: name, item: it });
         return (
           '<div class="congr-item">' +
             '<div class="ci-desc">' + it.descricao +
@@ -1957,10 +1974,10 @@ function renderCongr(entries) {
             '<div class="ci-val">' + R$(it.total) + '</div>' +
             '<div class="ci-actions">' +
               '<button class="ci-btn ci-btn-edit" ' +
-                'onclick="editCongrItem(\'' + safeName + '\',' + idx + ')" ' +
+                'onclick="editCongrItem(' + cacheIdx + ')" ' +
                 'title="Editar item">✏️</button>' +
               '<button class="ci-btn ci-btn-del" ' +
-                'onclick="deleteCongrItem(\'' + safeName + '\',' + idx + ')" ' +
+                'onclick="deleteCongrItem(' + cacheIdx + ')" ' +
                 'title="Excluir item">✕</button>' +
             '</div>' +
           '</div>'
