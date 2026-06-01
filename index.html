@@ -698,24 +698,26 @@
 <script>
   const SUPABASE_URL = "https://fyggsslndwsguavhduly.supabase.co";
   const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZ5Z2dzc2xuZHdzZ3VhdmhkdWx5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzYxNzYyNDksImV4cCI6MjA5MTc1MjI0OX0.xxoROa9LNFBgSitG_sEP4IknAzIU7vxZuinRC_P0Lh4";
-  const SCHEMA = "cns";
-  const TABLE  = "almoxarifado_dados";
-  const REST   = SUPABASE_URL + "/rest/v1/" + TABLE;
+  // ─── Schema public (padrão do PostgREST — sem Accept/Content-Profile) ───
+  const TABLE = "cnsCaieiras_almoxarifado";
+  const REST  = SUPABASE_URL + "/rest/v1/" + TABLE;
 
-  // Headers padrão — Accept-Profile força o schema cns em todas as chamadas REST
+  // Headers para ESCRITA (POST/PUT/PATCH) — inclui Content-Type e Prefer
   const HEADERS = {
-    "apikey":          SUPABASE_ANON_KEY,
-    "Authorization":   "Bearer " + SUPABASE_ANON_KEY,
-    "Content-Type":    "application/json",
-    "Accept-Profile":  SCHEMA,   // leitura no schema cns
-    "Content-Profile": SCHEMA,   // escrita  no schema cns
-    "Prefer":          "return=minimal"
+    "apikey":        SUPABASE_ANON_KEY,
+    "Authorization": "Bearer " + SUPABASE_ANON_KEY,
+    "Content-Type":  "application/json",
+    "Prefer":        "return=minimal"
   };
 
-  // Cliente Supabase — usado apenas para Realtime
-  const _supabase = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
-    db: { schema: SCHEMA }
-  });
+  // Headers para LEITURA (GET) — sem Prefer nem Content-Type
+  const HEADERS_GET = {
+    "apikey":        SUPABASE_ANON_KEY,
+    "Authorization": "Bearer " + SUPABASE_ANON_KEY
+  };
+
+  // Cliente Supabase — usado apenas para Realtime (schema public = padrão)
+  const _supabase = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
   // _editouLocal: após qualquer edição local o canal realtime fica desativado
   window._editouLocal = false;
@@ -785,12 +787,12 @@
     });
   }
 
-  // ── LOAD (GET via fetch direto com Accept-Profile) ───────────────────────
+  // ── LOAD (GET via fetch direto — schema public, sem Accept-Profile) ────────
   async function fbLoad() {
     try {
       const res = await fetch(REST + "?id=eq.1&limit=1", {
         method:  "GET",
-        headers: HEADERS
+        headers: HEADERS_GET
       });
       if(!res.ok) {
         const err = await res.json().catch(() => ({}));
@@ -833,10 +835,10 @@
 
   // ── Realtime ─────────────────────────────────────────────────────────────
   const realtimeChannel = _supabase
-    .channel("cns-almoxarifado")
+    .channel("cnsCaieiras-almoxarifado")
     .on(
       "postgres_changes",
-      { event: "*", schema: SCHEMA, table: TABLE, filter: "id=eq.1" },
+      { event: "*", schema: "public", table: TABLE, filter: "id=eq.1" },
       (payload) => {
         if(window._editouLocal) return;
         if(!window._fbLoaded) return;
