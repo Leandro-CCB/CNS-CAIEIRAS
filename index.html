@@ -722,7 +722,7 @@
   // _editouLocal: após qualquer edição local o canal realtime fica desativado
   window._editouLocal = false;
 
-  // ── SAVE (UPSERT via fetch direto) ──────────────────────────────────────
+  // ── SAVE (UPSERT robusto via POST com resolution=merge-duplicates) ──────
   window.fbSave = async function() {
     window._editouLocal = true;
     try {
@@ -734,19 +734,7 @@
         bloqueado:    pedidosBloqueados,
         atualizado:   new Date().toISOString()
       };
-      const res = await fetch(REST + "?id=eq.1", {
-        method:  "PUT",
-        headers: HEADERS,
-        body:    JSON.stringify(payload)
-      });
-      // Se não encontrou a linha ainda, faz INSERT
-      if(res.status === 404 || res.status === 406) {
-        await fetch(REST, {
-          method:  "POST",
-          headers: Object.assign({}, HEADERS, { Prefer: "resolution=merge-duplicates,return=minimal" }),
-          body:    JSON.stringify(payload)
-        });
-      }
+      await sbUpsert(payload);
       console.log("✅ Supabase: dados salvos");
     } catch(e) {
       console.error("❌ Supabase save error:", e);
@@ -813,15 +801,6 @@
         buildDashboard(); buildCongregacoes(); buildEstoque();
         buildPedidos();   buildHistorico(); buildCompras(); buildCadastro();
         rebuildIgrejaSelects();
-        // Salva dados já corrigidos de volta
-        await sbUpsert({
-          id: 1,
-          congregacoes: DATA.congregacoes,
-          estoque:      DATA.estoque,
-          pedidos:      DATA.pedidos,
-          bloqueado:    pedidosBloqueados,
-          atualizado:   new Date().toISOString()
-        });
         console.log("✅ Supabase: dados carregados e recalculados");
         showToast("☁️ Dados sincronizados com Supabase!");
       } else {
