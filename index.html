@@ -1446,6 +1446,8 @@ function editCongrItem(cacheIdx) {
     buildDashboard();
     buildHistorico();
     buildEstoque();
+    buildPedidos();
+    buildCompras();
     if(window.fbSave) window.fbSave();
     showToast('✅ Item atualizado com sucesso!');
   });
@@ -1468,6 +1470,10 @@ function deleteCongrItem(cacheIdx) {
   DATA.pedidos = DATA.pedidos.filter(p => !(p.congregacao === congregName && p.descricao === it.descricao));
   filterCongr();
   buildDashboard();
+  buildHistorico();
+  buildEstoque();
+  buildPedidos();
+  buildCompras();
   if(window.fbSave) window.fbSave();
   showToast('🗑️ Item removido da congregação.');
 }
