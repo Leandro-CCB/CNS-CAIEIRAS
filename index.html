@@ -1398,10 +1398,22 @@ function editCongrItem(cacheIdx) {
     if(data.saida <= 0) { showToast('⚠️ A quantidade deve ser maior que zero!'); return; }
     const descOriginal = it.descricao;
 
+    // Respeita o filtro de mês ativo na tela: se houver um mês selecionado,
+    // a edição deve considerar/alterar somente os pedidos DAQUELE mês —
+    // caso contrário o "saida" mostrado no card (já filtrado por mês) fica
+    // dessincronizado do total usado no cálculo (que somava todos os meses),
+    // fazendo a edição não refletir visualmente nenhuma mudança.
+    const filtMesAtivo = document.getElementById('filter-congr-mes')?.value || '';
+    function pedidoNoMesFiltrado(p) {
+      if(!filtMesAtivo) return true;
+      const parts = (p.data || '').split('/');
+      return parts[1] === filtMesAtivo;
+    }
+
     // ── Sincronizar DATA.pedidos preservando o histórico ──
-    // 1) Atualiza descrição, unidade, preço e obs em todos os pedidos existentes
+    // 1) Atualiza descrição, unidade, preço e obs nos pedidos existentes (respeitando o mês filtrado)
     DATA.pedidos.forEach(function(p) {
-      if(p.congregacao === congregName && p.descricao === descOriginal) {
+      if(p.congregacao === congregName && p.descricao === descOriginal && pedidoNoMesFiltrado(p)) {
         p.descricao = data.descricao;
         p.unidade   = data.unidade;
         p.preco     = data.preco;
@@ -1411,22 +1423,25 @@ function editCongrItem(cacheIdx) {
 
     // 2) Ajusta a quantidade total sem apagar o histórico:
     //    Calcula a diferença entre o novo total e a soma atual dos pedidos
-    //    e aplica essa diferença no pedido mais recente deste produto/congregação.
+    //    (somente do mês filtrado, se houver filtro) e aplica essa diferença
+    //    no pedido mais recente deste produto/congregação/mês.
     const pedidosRelacionados = DATA.pedidos.filter(function(p) {
-      return p.congregacao === congregName && p.descricao === data.descricao;
+      return p.congregacao === congregName && p.descricao === data.descricao && pedidoNoMesFiltrado(p);
     });
     const somaAtual = pedidosRelacionados.reduce(function(s, p) { return s + (p.quantidade || 0); }, 0);
     const diff = data.saida - somaAtual;
 
     if(diff !== 0) {
       if(pedidosRelacionados.length > 0) {
-        // Ajusta no pedido mais recente
+        // Ajusta no pedido mais recente (do mês filtrado, se aplicável)
         const ultimoPedido = pedidosRelacionados[pedidosRelacionados.length - 1];
         ultimoPedido.quantidade = (ultimoPedido.quantidade || 0) + diff;
         if(ultimoPedido.quantidade <= 0) ultimoPedido.quantidade = 1;
       } else {
-        // Sem pedido existente, cria um novo
-        const hoje = (function(){ const d = new Date(); return d.toLocaleDateString('pt-BR',{day:'2-digit',month:'2-digit',year:'numeric'}); })();
+        // Sem pedido existente (no mês filtrado), cria um novo
+        const hoje = filtMesAtivo
+          ? ('01/' + filtMesAtivo + '/' + new Date().getFullYear())
+          : (function(){ const d = new Date(); return d.toLocaleDateString('pt-BR',{day:'2-digit',month:'2-digit',year:'numeric'}); })();
         DATA.pedidos.push({
           descricao:   data.descricao,
           unidade:     data.unidade,
